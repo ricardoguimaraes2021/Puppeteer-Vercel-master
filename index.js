@@ -1,37 +1,44 @@
-const app = require("express")();
+const express = require("express");
+const app = express();
+const puppeteer = require("puppeteer");
 
-let chrome = {};
-let puppeteer;
-
-if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
-  chrome = require("chrome-aws-lambda");
-  puppeteer = require("puppeteer-core");
-} else {
-  puppeteer = require("puppeteer");
-}
+app.get("/", (req, res) => {
+  res.send("Welcome! Use /api with a Streamtape URL to fetch the video source URL.");
+});
 
 app.get("/api", async (req, res) => {
-  let options = {};
-
-  if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
-    options = {
-      args: [...chrome.args, "--hide-scrollbars", "--disable-web-security"],
-      defaultViewport: chrome.defaultViewport,
-      executablePath: await chrome.executablePath,
-      headless: true,
-      ignoreHTTPSErrors: true,
-    };
-  }
-
+  // Retrieve the URL from the 'url' query parameter
+  const videoUrl = req.query.url || "https://streamtape.com/v/7zeY3yGXYzfA1rz";
+  
   try {
-    let browser = await puppeteer.launch(options);
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]  // Required for Glitch environment
+    });
+    const page = await browser.newPage();
+    
+    // Navigate to the provided video URL
+    await page.goto(videoUrl, { waitUntil: "networkidle2" });
 
-    let page = await browser.newPage();
-    await page.goto("https://www.google.com");
-    res.send(await page.title());
+    // Wait for the video element with ID 'mainvideo' to load
+    await page.waitForSelector("video#mainvideo", { timeout: 10000 });
+
+    // Extract the 'src' attribute of the video element
+    const videoSrc = await page.evaluate(() => {
+      const videoElement = document.querySelector("video#mainvideo");
+      return videoElement ? videoElement.getAttribute("src") : null;
+    });
+
+    await browser.close();
+
+    if (videoSrc) {
+      res.send(`Video source URL: ${videoSrc}`);
+    } else {
+      res.status(404).send("Video element not found or src attribute missing.");
+    }
   } catch (err) {
-    console.error(err);
-    return null;
+    console.error("Error fetching video source URL:", err);
+    res.status(500).send("Error fetching video source URL. Please check the URL or try again later.");
   }
 });
 
